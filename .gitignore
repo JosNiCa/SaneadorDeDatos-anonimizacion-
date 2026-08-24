@@ -9,6 +9,7 @@ dist/
 *.egg-info/
 .idea/workspace.xml
 .idea/shelf/
+.idea/inspectionProfiles/
+.idea/vcs.xml
 output/
 salida/
-

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
+import re
 import tempfile
 from collections import Counter
 from pathlib import Path
@@ -34,14 +34,10 @@ def list_input_pdfs(input_path: Path) -> list[Path]:
     return sorted((path for path in input_path.iterdir() if path.is_file() and path.suffix.lower() == ".pdf"), key=lambda path: path.name.casefold())
 
 
-def _safe_identifier(path: Path) -> str:
-    return hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()[:16]
-
-
-def output_path_for(source: Path, output_dir: Path) -> Path:
+def output_path_for(source: Path, output_dir: Path, pseudonymizer: Pseudonymizer) -> Path:
     """No replica el nombre fuente, que podria contener informacion identificable."""
 
-    return output_dir / f"anonimizado_{_safe_identifier(source)}.pdf"
+    return output_dir / f"anonimizado_{pseudonymizer.token('output-file', str(source.resolve()), 16)}.pdf"
 
 
 def _validate_digital_document(document: fitz.Document) -> list[PageLayout]:
@@ -88,7 +84,8 @@ def _font_size_to_fit(rect: fitz.Rect, replacement: str) -> float:
 
     if not replacement:
         return 0.0
-    maximum = max(4.5, min(rect.height * 0.78, 11.0))
+    # insert_textbox necesita espacio adicional para ascenso y descenso de la fuente.
+    maximum = max(4.5, min(rect.height * 0.60, 11.0))
     size = maximum
     while size >= 4.5:
         if fitz.get_text_length(replacement, fontname="helv", fontsize=size) <= max(1.0, rect.width - 0.3):
@@ -198,6 +195,16 @@ def _content_streams(document: fitz.Document) -> str:
     return "\n".join(chunks)
 
 
+def _contains_value(haystack: str, value: str) -> bool:
+    """Busca un valor completo, sin confundir periodos breves con parte de otro numero."""
+
+    normalized_value = normalize(value)
+    if not normalized_value:
+        return False
+    boundary = r"[A-Z0-9Ñ]"
+    return re.search(rf"(?<!{boundary}){re.escape(normalized_value)}(?!{boundary})", normalize(haystack)) is not None
+
+
 def _verify_output(
     output: Path,
     expected_pages: int,
@@ -216,16 +223,13 @@ def _verify_output(
                 raise AnonymizationError("No se pudo renderizar una pagina anonimizada.")
         extracted = "\n".join(page.get_text("text") for page in document)
         streams = _content_streams(document)
-        normalized_text = normalize(extracted)
-        normalized_streams = normalize(streams)
         for item in detections:
             if item.category == Category.RASTER_IMAGE:
                 continue
-            original = normalize(item.original)
-            if original and (original in normalized_text or original in normalized_streams):
+            if _contains_value(extracted, item.original) or _contains_value(streams, item.original):
                 raise AnonymizationError("La verificacion encontro un valor sensible residual.")
         metadata_values = " ".join(value or "" for value in document.metadata.values())
-        if any(normalize(item.original) in normalize(metadata_values) for item in detections if item.original):
+        if any(_contains_value(metadata_values, item.original) for item in detections if item.original):
             raise AnonymizationError("La verificacion encontro PII en los metadatos.")
         if document.get_xml_metadata() or tuple(document.embfile_names()):
             raise AnonymizationError("Persisten metadatos XMP o archivos adjuntos.")
@@ -243,7 +247,7 @@ def anonymize_file(
     """Anonimiza un PDF de manera transaccional: o se verifica, o no se entrega."""
 
     source = source.resolve()
-    target = output_path_for(source, output_dir.resolve())
+    target = output_path_for(source, output_dir.resolve(), pseudonymizer)
     if target.resolve() == source:
         raise AnonymizationError("La salida no puede sobrescribir el PDF fuente.")
     if target.exists() and not dry_run:
@@ -253,6 +257,8 @@ def anonymize_file(
         profile_result = detect_document(layouts, pseudonymizer)
         if profile_result is None:
             raise AnonymizationError("No se reconocio un perfil con confianza suficiente.")
+        if strict and profile_result.warnings:
+            raise AnonymizationError("El perfil detectado tiene advertencias y se rechazo en modo estricto.")
         detections = profile_result.detections
         unresolved = [item for item in detections if not item.redact_only and not item.replacement]
         if unresolved:
@@ -315,7 +321,8 @@ def safe_file_result(
     try:
         return anonymize_file(source, output_dir, pseudonymizer, **kwargs)
     except (fitz.FileDataError, fitz.EmptyFileError, OSError, ValueError, AnonymizationError) as exc:
-        return FileResult(str(source), None, False, None, error=str(exc))
+        message = str(exc) if isinstance(exc, AnonymizationError) else "No se pudo procesar el PDF de forma segura."
+        return FileResult(str(source), None, False, None, error=message)
 
 
 def report_payload(results: list[FileResult], pseudonymizer: Pseudonymizer, *, dry_run: bool) -> dict[str, Any]:
@@ -334,7 +341,7 @@ def report_payload(results: list[FileResult], pseudonymizer: Pseudonymizer, *, d
         ]
         files.append(
             {
-                "id_archivo": _safe_identifier(Path(result.source)),
+                "id_archivo": pseudonymizer.token("report-file", result.source, 32),
                 "exitoso": result.success,
                 "perfil": result.profile,
                 "paginas": result.pages,

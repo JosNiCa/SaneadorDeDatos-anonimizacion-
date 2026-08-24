@@ -32,9 +32,7 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="JSON opcional de regiones vectoriales por perfil; se redactan solo las regiones indicadas.",
     )
-    strict = parser.add_mutually_exclusive_group()
-    strict.add_argument("--strict", dest="strict", action="store_true", default=True, help="Falla de forma segura (predeterminado).")
-    strict.add_argument("--no-strict", dest="strict", action="store_false", help="Conserva advertencias, sin relajar validaciones de seguridad.")
+    parser.add_argument("--strict", action="store_true", default=True, help="Falla de forma segura (predeterminado).")
     return parser.parse_args(argv)
 
 

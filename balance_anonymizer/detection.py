@@ -15,7 +15,7 @@ _DATE_RE = re.compile(
     r"\b(?:\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2}:\d{2})?|\d{1,2}/[A-Za-záéíóúñ]+/\d{2,4}|\d{1,2}/\d{1,2}/\d{2,4})\b",
     re.IGNORECASE,
 )
-_ACCOUNT_RE = re.compile(r"(?<!\d)(?:\d{2,}(?:[-/]\d{2,}){2,})(?!\d)")
+_ACCOUNT_RE = re.compile(r"(?<!\d)(?:\d+(?:[-/]\d+){2,})(?!\d)")
 
 
 @dataclass(frozen=True)
