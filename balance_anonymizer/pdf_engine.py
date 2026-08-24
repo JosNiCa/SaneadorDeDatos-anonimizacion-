@@ -128,8 +128,6 @@ def _remove_raster_images(document: fitz.Document) -> int:
     for page in document:
         for image in page.get_images(full=True):
             xref = int(image[0])
-            if xref in removed:
-                continue
             try:
                 page.delete_image(xref)
             except Exception as exc:  # PyMuPDF puede no poder borrar una referencia malformada.
