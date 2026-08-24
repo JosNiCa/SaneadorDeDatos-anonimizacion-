@@ -1,0 +1,1 @@
+"""Pruebas sinteticas de BalanzaPrivada."""
