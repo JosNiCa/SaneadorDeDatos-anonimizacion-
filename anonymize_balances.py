@@ -12,8 +12,10 @@ from pathlib import Path
 from balance_anonymizer.batch import (
     BatchError,
     BatchProcessor,
+    failed_file_ids_from_report,
     list_input_files,
     report_payload,
+    select_failed_sources,
     write_report,
 )
 from balance_anonymizer.manifest import ManifestError, load_manifest, write_manifest_proposal
@@ -51,6 +53,11 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--registry", type=Path, help="Registro SQLite persistente.")
     parser.add_argument("--report", type=Path, help="Reporte JSON seguro.")
+    parser.add_argument(
+        "--retry-report",
+        type=Path,
+        help="Reporte técnico v3 previo; procesa solo los archivos que allí fallaron.",
+    )
     parser.add_argument("--discover", action="store_true", help="Propone relaciones sin generar documentos.")
     parser.add_argument("--dry-run", action="store_true", help="Muestra detecciones y conflictos sin generar documentos.")
     parser.add_argument("--strip-signature", action="store_true", help="Elimina atributos de firma XML de forma explícita.")
@@ -123,6 +130,13 @@ def main(argv: list[str] | None = None) -> int:
         reporting_pseudo = Pseudonymizer(seed)
         vector_regions = load_vector_logo_regions(args.vector_logo_regions)
         sources = list_input_files(args.input)
+        if args.retry_report:
+            failed_ids = failed_file_ids_from_report(args.retry_report)
+            sources = select_failed_sources(sources, failed_ids, reporting_pseudo)
+            if not sources:
+                raise BatchError(
+                    "No hay archivos fallidos del reporte que coincidan con la entrada y la semilla actual."
+                )
         if not sources:
             raise BatchError("No se encontraron archivos compatibles.")
         manifest = load_manifest(args.manifest)

@@ -57,6 +57,27 @@ La semilla puede recibirse mediante:
 La semilla debe tener al menos 16 caracteres. No se almacena en el registro,
 reporte ni documentos generados.
 
+## Reintentar únicamente archivos fallidos
+
+Para volver a procesar solo los archivos marcados como fallidos en un reporte
+técnico previo, proporcione el mismo directorio (o archivo) de entrada, la
+misma semilla y `--retry-report`:
+
+```bash
+python anonymize_balances.py \
+  --input ./entrada \
+  --output ./salida_reintento \
+  --registry ./estado/anon_registry.sqlite \
+  --seed-env BALANCE_ANON_SEED \
+  --retry-report ./salida/reporte.json \
+  --report ./salida_reintento/reporte.json
+```
+
+El reporte no guarda rutas de archivos: usa IDs HMAC para no exponerlas. Por
+ello, el reintento recalcula los IDs de las fuentes indicadas y requiere la
+misma semilla con la que se creó el reporte. Los archivos exitosos se excluyen
+antes del descubrimiento y no aparecen en el nuevo reporte.
+
 ## Descubrimiento y modo de prueba
 
 ```bash

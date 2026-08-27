@@ -87,6 +87,47 @@ def list_input_files(input_path: Path) -> list[Path]:
     )
 
 
+def failed_file_ids_from_report(path: Path) -> set[str]:
+    """Obtiene los identificadores fallidos de un reporte técnico v3.
+
+    El reporte no contiene rutas por diseño. Los IDs se vuelven a calcular
+    contra las fuentes de la ejecución actual con la misma semilla.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BatchError("No se pudo leer el reporte de reintento.") from exc
+    if not isinstance(payload, dict) or payload.get("version") != 3:
+        raise BatchError("El reporte de reintento debe ser un reporte técnico versión 3.")
+    files = payload.get("archivos")
+    if not isinstance(files, list):
+        raise BatchError("El reporte de reintento no contiene una lista de archivos válida.")
+
+    statuses: dict[str, bool] = {}
+    for entry in files:
+        if not isinstance(entry, dict):
+            raise BatchError("El reporte de reintento contiene un archivo inválido.")
+        file_id, success = entry.get("id_archivo"), entry.get("exitoso")
+        if not isinstance(file_id, str) or not re.fullmatch(r"[0-9A-F]{32}", file_id):
+            raise BatchError("El reporte de reintento contiene un identificador de archivo inválido.")
+        if not isinstance(success, bool):
+            raise BatchError("El reporte de reintento contiene un estado de archivo inválido.")
+        previous = statuses.setdefault(file_id, success)
+        if previous != success:
+            raise BatchError("El reporte de reintento tiene estados contradictorios para un archivo.")
+    return {file_id for file_id, success in statuses.items() if not success}
+
+
+def select_failed_sources(
+    sources: list[Path], failed_ids: set[str], pseudo: Pseudonymizer
+) -> list[Path]:
+    """Filtra las fuentes para reintentar solo los IDs fallidos del reporte."""
+    return [
+        source for source in sources
+        if pseudo.token("report-file", str(source), 32) in failed_ids
+    ]
+
+
 def _content_key(snapshot: DocumentSnapshot) -> str:
     rows = []
     for line in snapshot.ledger_lines:

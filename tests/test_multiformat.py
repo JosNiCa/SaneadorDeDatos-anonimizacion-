@@ -612,6 +612,55 @@ def test_cli_never_uses_a_source_as_report_destination(
     assert source.read_bytes() == original
 
 
+def test_cli_retry_report_processes_only_previously_failed_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    successful = tmp_path / "successful.xlsx"
+    failed = tmp_path / "failed.xml"
+    _make_xlsx_b(successful)
+    _make_xml(failed)
+    pseudo = Pseudonymizer(SEED)
+    retry_report = tmp_path / "previous-report.json"
+    retry_report.write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "archivos": [
+                    {
+                        "id_archivo": pseudo.token("report-file", str(successful.resolve()), 32),
+                        "exitoso": True,
+                    },
+                    {
+                        "id_archivo": pseudo.token("report-file", str(failed.resolve()), 32),
+                        "exitoso": False,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    report = tmp_path / "retry-result.json"
+    monkeypatch.setenv("BALANCE_ANON_SEED", SEED)
+
+    code = main(
+        [
+            "--input", str(tmp_path),
+            "--output", str(tmp_path / "out"),
+            "--discover",
+            "--retry-report", str(retry_report),
+            "--report", str(report),
+        ]
+    )
+
+    assert code == 0
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["resumen"]["archivos"] == 1
+    assert payload["archivos"][0]["id_archivo"] == pseudo.token(
+        "report-file", str(failed.resolve()), 32
+    )
+
+
 def test_discover_generates_reviewable_manifest_proposal(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
