@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:balance-anonymizer:equivalence-manifest:v1",
+  "title": "Manifiesto de relaciones de balanzas",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "groups": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/group" },
+      "default": []
+    },
+    "series": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/series" },
+      "default": []
+    }
+  },
+  "$defs": {
+    "opaqueId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_.-]+$"
+    },
+    "files": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "relation", "files"],
+      "properties": {
+        "id": { "$ref": "#/$defs/opaqueId" },
+        "relation": {
+          "enum": ["exact_equivalent", "projection"]
+        },
+        "entity_id": { "$ref": "#/$defs/opaqueId" },
+        "files": { "$ref": "#/$defs/files" },
+        "metadata_source": { "type": "string", "minLength": 1 }
+      }
+    },
+    "series": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "files"],
+      "properties": {
+        "id": { "$ref": "#/$defs/opaqueId" },
+        "entity_id": { "$ref": "#/$defs/opaqueId" },
+        "files": { "$ref": "#/$defs/files" },
+        "metadata_source": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

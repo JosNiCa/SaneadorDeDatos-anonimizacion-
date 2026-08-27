@@ -13,3 +13,10 @@ dist/
 .idea/vcs.xml
 output/
 salida/
+tmp/
+
+# Fixtures reales/sanitizados y resultados privados de validación.
+.private-fixtures/
+private-fixtures/
+.private-validation/
+private-validation/

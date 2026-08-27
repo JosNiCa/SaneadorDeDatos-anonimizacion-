@@ -1,0 +1,24 @@
+# Solo identificadores opacos y rutas. No incluya nombres, RFC ni direcciones.
+groups:
+  - id: balance_projection_001
+    relation: projection
+    entity_id: entity_001
+    files:
+      - entrada/proyeccion.xlsx
+      - entrada/mayor.xml
+    metadata_source: entrada/proyeccion.xlsx
+
+  - id: balance_equivalent_002
+    relation: exact_equivalent
+    entity_id: entity_002
+    files:
+      - entrada/reporte.pdf
+      - entrada/reporte.xlsx
+    metadata_source: entrada/reporte.xlsx
+
+series:
+  - id: balance_series_003
+    entity_id: entity_003
+    files:
+      - entrada/periodo_anterior.pdf
+      - entrada/periodo_siguiente.xml
