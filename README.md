@@ -39,11 +39,13 @@ python anonymize_balances.py \
   --report ./salida/reporte.json
 ```
 
-`--input` acepta un archivo o un directorio no recursivo. PDF, XLSX y XML se
-procesan; los `.xls` binarios se incluyen en el reporte como `UNSUPPORTED_XLS`
-para que nunca desaparezcan silenciosamente del conteo. Deben exportarse a
-XLSX desde una aplicación de confianza antes de anonimizarse. El modo estricto
-es el predeterminado. La utilidad devuelve `0` si todos los archivos terminan
+`--input` acepta un archivo o un directorio no recursivo. PDF, XLSX, XLS y XML
+se procesan. Los `.xls` binarios se convierten con LibreOffice en un directorio
+temporal y se someten al mismo análisis y validación estricta de XLSX; el XLS
+fuente nunca se modifica y la salida publicada es un `.xlsx` anonimizado. Si
+LibreOffice no está disponible o la conversión no es reproducible, el archivo
+se rechaza mediante un código técnico seguro. El modo estricto es el
+predeterminado. La utilidad devuelve `0` si todos los archivos terminan
 correctamente y `2` si existe un rechazo o un grupo fallido.
 
 La semilla puede recibirse mediante:

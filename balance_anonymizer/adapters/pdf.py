@@ -30,6 +30,23 @@ COMBINED_ACCOUNT_RE = re.compile(r"^(?P<code>\d+(?:[.-]\d+)*)\s+(?P<description>
 MONEY_RE = re.compile(r"^-?\d[\d,]*\.\d+$")
 
 
+_PDF_DISCOVERY_CODES = {
+    "El PDF protegido con contrasena no se procesa en modo estricto.": "PDF_PASSWORD_PROTECTED",
+    "El PDF no contiene paginas.": "PDF_EMPTY",
+    "No hay texto digital extraible con coordenadas confiables.": "PDF_NO_DIGITAL_TEXT",
+    "No fue posible reconstruir lineas digitales confiables.": "PDF_TEXT_LAYOUT_UNRECOGNIZED",
+    "Se detectaron coordenadas de texto no confiables.": "PDF_TEXT_COORDINATES_INVALID",
+    "No se reconocio una familia visual con confianza suficiente.": "PDF_PROFILE_UNRECOGNIZED",
+    "No se localizaron con confianza todos los campos o columnas obligatorios.": "PDF_REQUIRED_FIELDS_MISSING",
+    "Existe un candidato sensible ambiguo en modo estricto.": "PDF_AMBIGUOUS_SENSITIVE_FIELD",
+}
+
+
+def _pdf_discovery_code(error: BaseException) -> str:
+    """Convierte fallos conocidos del motor en códigos seguros y estables."""
+    return _PDF_DISCOVERY_CODES.get(str(error), "PDF_DISCOVERY_ENGINE_FAILED")
+
+
 def _decimal(text: str) -> Decimal:
     return decimal_value(text, text)[0]
 
@@ -322,14 +339,14 @@ class PdfAdapter:
                 vector_regions=self.vector_regions,
             )
         except (AnonymizationError, OSError, RuntimeError, ValueError) as exc:
-            raise AdapterError("No se pudo descubrir el PDF con la lógica existente.") from exc
+            raise AdapterError(_pdf_discovery_code(exc)) from exc
         if not detected.success or not detected.profile:
-            raise AdapterError("No se reconoció el PDF.")
+            raise AdapterError("PDF_PROFILE_UNRECOGNIZED")
         try:
             with fitz.open(source) as document:
                 ledger = _web_ledger(document) if detected.profile == "WEB_BALANCE" else _positioned_ledger(document)
                 if not ledger:
-                    raise AdapterError("No se extrajeron renglones contables del PDF.")
+                    raise AdapterError("PDF_LEDGER_UNREADABLE")
                 temporal_values = [
                     (line, FormatLocation("pdf_page", page=index))
                     for index, page in enumerate(document)
@@ -349,7 +366,7 @@ class PdfAdapter:
                     ),
                 }
         except (fitz.FileDataError, OSError) as exc:
-            raise AdapterError("No se pudo leer la estructura PDF.") from exc
+            raise AdapterError("PDF_STRUCTURE_UNREADABLE") from exc
         spans = _sensitive_spans(detected.detections)
         _attach_line_spans(ledger, spans)
         return DocumentSnapshot(

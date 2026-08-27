@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 import zipfile
@@ -480,7 +481,30 @@ def test_legacy_xls_is_reported_explicitly_instead_of_ignored(tmp_path: Path) ->
     assert sources == [source.resolve()]
     assert len(run.results) == 1
     assert run.results[0].adapter == "xls"
-    assert run.results[0].extra["codigo_error"] == "UNSUPPORTED_XLS"
+    assert run.results[0].extra["codigo_error"] == "XLSX_PROFILE_UNRECOGNIZED"
+
+
+def test_batch_preserves_safe_pdf_and_xlsx_discovery_codes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf = tmp_path / "unsupported.pdf"
+    xlsx = tmp_path / "unsupported.xlsx"
+    pdf.write_bytes(b"%PDF-test")
+    xlsx.write_bytes(b"not-an-ooxml-container")
+    processor = BatchProcessor(SEED, registry=None)
+
+    class FailingPdf:
+        name = "pdf"
+
+        def discover(self, *args: object, **kwargs: object) -> object:
+            raise AdapterError("PDF_PROFILE_UNRECOGNIZED")
+
+    monkeypatch.setitem(processor.adapters, ".pdf", FailingPdf())
+    run = processor.run([pdf.resolve(), xlsx.resolve()], tmp_path / "out", discover_only=True)
+
+    codes = {item.adapter: item.extra["codigo_error"] for item in run.results}
+    assert codes == {"pdf": "PDF_PROFILE_UNRECOGNIZED", "xlsx": "XLSX_INVALID_CONTAINER"}
 
 
 def test_xml_preserves_namespace_order_and_decimal_text_while_anonymizing_temporal_fields(tmp_path: Path) -> None:

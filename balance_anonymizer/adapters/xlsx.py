@@ -60,6 +60,21 @@ OWNER_EXCLUSIONS = (
 UNSUPPORTED_PARTS = (
     "vbaproject", "activex", "embeddings/", "oleobject", "controls/",
 )
+
+
+_XLSX_DISCOVERY_CODES = {
+    "El libro excede el límite de tamaño permitido.": "XLSX_ARCHIVE_TOO_LARGE",
+    "El XLSX no es un contenedor OOXML válido.": "XLSX_INVALID_CONTAINER",
+    "El libro excede los límites estructurales permitidos.": "XLSX_STRUCTURE_LIMIT",
+    "No se reconoció una familia XLSX compatible.": "XLSX_PROFILE_UNRECOGNIZED",
+    "No se localizaron renglones contables en el XLSX.": "XLSX_LEDGER_UNREADABLE",
+    "No se localizó el propietario del XLSX.": "XLSX_OWNER_UNREADABLE",
+}
+
+
+def _xlsx_discovery_code(error: BaseException) -> str:
+    """Devuelve un código que no incorpora contenido de la hoja."""
+    return _XLSX_DISCOVERY_CODES.get(str(error), "XLSX_DISCOVERY_FAILED")
 MAX_ARCHIVE_SIZE = 100 * 1024 * 1024
 MAX_UNCOMPRESSED_SIZE = 250 * 1024 * 1024
 MAX_PARTS = 5000
@@ -988,16 +1003,26 @@ class XlsxAdapter:
         source = source.resolve()
         if source.suffix.lower() == ".xlsm":
             raise AdapterError("UNSUPPORTED_XLSM")
-        parts, unsupported = _archive_parts(source, strict=strict)
+        try:
+            parts, unsupported = _archive_parts(source, strict=strict)
+        except AdapterError as exc:
+            if str(exc) == "UNSUPPORTED_XLSX_OBJECT":
+                raise
+            raise AdapterError(_xlsx_discovery_code(exc)) from exc
         try:
             book = _load_workbook_compatible(source)
         except Exception as exc:
-            raise AdapterError("No se pudo abrir el libro XLSX.") from exc
-        profile = _find_profile(book)
-        sheet = book[profile.sheet]
-        ledger = _ledger_lines(sheet, profile)
-        owner, spans = _owner_and_spans(book, profile, ledger)
-        image_spans = _image_spans(book, profile, strict=strict)
+            raise AdapterError("XLSX_WORKBOOK_UNREADABLE") from exc
+        try:
+            profile = _find_profile(book)
+            sheet = book[profile.sheet]
+            ledger = _ledger_lines(sheet, profile)
+            owner, spans = _owner_and_spans(book, profile, ledger)
+            image_spans = _image_spans(book, profile, strict=strict)
+        except AdapterError as exc:
+            if str(exc) == "UNSUPPORTED_XLSX_OBJECT":
+                raise
+            raise AdapterError(_xlsx_discovery_code(exc)) from exc
         spans.extend(image_spans)
         temporal_values = [
             (span.original, span.location)
@@ -1213,7 +1238,8 @@ class XlsxAdapter:
             counts[Category.RASTER_IMAGE.value] += len(indexes)
 
         temporary_dir.mkdir(parents=True, exist_ok=True)
-        target = temporary_dir / f"anonimizado_{plan.pseudonymizer.token('output-file', str(snapshot.source), 16)}.xlsx"
+        output_source = snapshot.private.get("output_source", snapshot.source)
+        target = temporary_dir / f"anonimizado_{plan.pseudonymizer.token('output-file', str(output_source), 16)}.xlsx"
         if target.resolve() == snapshot.source.resolve() or target.exists():
             raise AdapterError("La salida XLSX no puede sobrescribir un archivo existente.")
         try:
