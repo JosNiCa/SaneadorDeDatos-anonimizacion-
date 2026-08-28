@@ -143,6 +143,7 @@ class AnonymizationPlan:
     synthetic_owner: dict[str, str] = field(default_factory=dict)
     metadata_source: Path | None = None
     canonical_temporal: TemporalMetadata | None = None
+    output_prefix: str = ""
     replacements: dict[str, str] = field(default_factory=dict, repr=False)
     conflicts: list[str] = field(default_factory=list)
     manifest_confirmed: bool = False

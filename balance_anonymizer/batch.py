@@ -80,6 +80,7 @@ class ResolvedGroup:
     entity_id: str | None = None
     metadata_source: Path | None = None
     manifest_confirmed: bool = False
+    auto_resolution: str | None = None
 
     @property
     def conflicts(self) -> list[str]:
@@ -93,6 +94,7 @@ class BatchRun:
     groups: list[ResolvedGroup]
     snapshots: list[DocumentSnapshot]
     mode: str
+    auto_resolve: bool = False
 
 
 def list_input_files(input_path: Path) -> list[Path]:
@@ -159,7 +161,9 @@ def _content_key(snapshot: DocumentSnapshot) -> str:
 
 
 def _group_id(pseudo: Pseudonymizer, snapshots: Iterable[DocumentSnapshot]) -> str:
-    content = "||".join(sorted(_content_key(item) for item in snapshots))
+    content = "||".join(
+        sorted(f"{item.source.resolve()}:{_content_key(item)}" for item in snapshots)
+    )
     return f"group_{pseudo.token('group-id', content, 16).lower()}"
 
 
@@ -174,12 +178,136 @@ def _group_relation(relations: Iterable[DocumentRelation], count: int) -> Relati
     return RelationType.STANDALONE if count == 1 else RelationType.AMBIGUOUS
 
 
+def _auto_identity(snapshot: DocumentSnapshot) -> tuple[str | None, str]:
+    """Obtiene una identidad automática solo cuando la evidencia es suficiente."""
+    if snapshot.owner.rfc:
+        return f"RFC:{normalize(snapshot.owner.rfc)}", "AUTO_RESOLVED_RFC"
+    fields = (
+        normalize(snapshot.owner.name) if snapshot.owner.name else "",
+        normalize(snapshot.owner.address) if snapshot.owner.address else "",
+        normalize(snapshot.owner.certificate) if snapshot.owner.certificate else "",
+    )
+    values = tuple(value for value in fields if value)
+    if len(values) >= 2:
+        return f"META:{'|'.join(values)}", "AUTO_RESOLVED_METADATA"
+    return None, "AUTO_SPLIT"
+
+
+def _auto_entity_id(pseudo: Pseudonymizer, identity: str) -> str:
+    return f"auto_entity_{pseudo.token('auto-entity', identity, 16).lower()}"
+
+
+def _metadata_score(snapshot: DocumentSnapshot) -> tuple[int, int, int]:
+    """Orden estable para elegir una fuente autorizada sin usar el nombre de archivo como señal."""
+    owner = snapshot.owner
+    temporal = snapshot.temporal
+    identity_fields = sum(bool(value) for value in (
+        owner.rfc, owner.name, owner.address, owner.certificate,
+    ))
+    temporal_fields = sum(bool(value) for value in (
+        temporal.year is not None and temporal.month is not None,
+        temporal.print_date,
+        temporal.period_start and temporal.period_end,
+    ))
+    return identity_fields, temporal_fields, len(snapshot.ledger_lines)
+
+
+def _select_metadata_source(snapshots: list[DocumentSnapshot]) -> Path:
+    best = max(_metadata_score(item) for item in snapshots)
+    return min(item.source for item in snapshots if _metadata_score(item) == best)
+
+
+def _auto_groups(
+    snapshots: list[DocumentSnapshot],
+    relations: list[DocumentRelation],
+    pseudo: Pseudonymizer,
+) -> list[ResolvedGroup]:
+    """Resuelve entidades sin fusionar documentos con identidades incompatibles."""
+    identities: dict[Path, tuple[str | None, str]] = {
+        item.source: _auto_identity(item) for item in snapshots
+    }
+    partitions: dict[str, list[DocumentSnapshot]] = {}
+    for snapshot in snapshots:
+        identity, _ = identities[snapshot.source]
+        # La falta de una identidad fuerte nunca enlaza dos documentos.
+        partition = identity or f"SPLIT:{snapshot.source}"
+        partitions.setdefault(partition, []).append(snapshot)
+
+    groups: list[ResolvedGroup] = []
+    for partition, documents in sorted(partitions.items(), key=lambda item: item[0]):
+        paths = {item.source for item in documents}
+        edges = [
+            item for item in relations
+            if item.right is not None
+            and item.left in paths
+            and item.right in paths
+            and item.relation in {
+                RelationType.EXACT_EQUIVALENT,
+                RelationType.PROJECTION,
+                RelationType.SERIES,
+            }
+        ]
+        parent = {item.source: item.source for item in documents}
+
+        def find(value: Path) -> Path:
+            while parent[value] != value:
+                parent[value] = parent[parent[value]]
+                value = parent[value]
+            return value
+
+        def union(left: Path, right: Path) -> None:
+            left_root, right_root = find(left), find(right)
+            if left_root != right_root:
+                parent[right_root] = left_root
+
+        for edge in edges:
+            union(edge.left, edge.right)  # type: ignore[arg-type]
+        components: dict[Path, list[DocumentSnapshot]] = {}
+        for snapshot in documents:
+            components.setdefault(find(snapshot.source), []).append(snapshot)
+        for component in components.values():
+            component_paths = {item.source for item in component}
+            component_edges = [
+                item for item in edges
+                if item.left in component_paths and item.right in component_paths
+            ]
+            auto_state = identities[component[0].source][1]
+            identity = identities[component[0].source][0]
+            if identity is None:
+                entity_id = None
+                metadata_source = None
+                confirmed = False
+            else:
+                entity_id = _auto_entity_id(pseudo, identity)
+                metadata_source = _select_metadata_source(component) if len(component) > 1 else None
+                confirmed = True
+            groups.append(
+                ResolvedGroup(
+                    _group_id(pseudo, component),
+                    component,
+                    _group_relation(component_edges, len(component)),
+                    component_edges,
+                    entity_id,
+                    metadata_source,
+                    confirmed,
+                    auto_state,
+                )
+            )
+    return groups
+
+
 def resolve_groups(
     snapshots: list[DocumentSnapshot],
     relations: list[DocumentRelation],
     manifest: list[ManifestGroup],
     pseudo: Pseudonymizer,
+    *,
+    auto_resolve: bool = False,
 ) -> list[ResolvedGroup]:
+    if auto_resolve:
+        if manifest:
+            raise BatchError("--auto-resolve no se puede combinar con un manifiesto.")
+        return _auto_groups(snapshots, relations, pseudo)
     by_path = {item.source.resolve(): item for item in snapshots}
     consumed: set[Path] = set()
     groups: list[ResolvedGroup] = []
@@ -321,6 +449,8 @@ def build_plan(
     group: ResolvedGroup,
     seed: str,
     registry: PseudonymRegistry,
+    *,
+    output_prefix: str = "",
 ) -> AnonymizationPlan:
     entity_key = _entity_key(group)
     pseudo = Pseudonymizer(seed, registry=registry, scope=entity_key)
@@ -375,7 +505,9 @@ def build_plan(
         "certificate": pseudo.certificate(certificate, entity_key),
     }
     canonical = None
-    if group.metadata_source:
+    if group.metadata_source and not any(
+        relation.relation == RelationType.SERIES for relation in group.relations
+    ):
         source = next(
             (item for item in group.snapshots if item.source == group.metadata_source.resolve()),
             None,
@@ -391,6 +523,7 @@ def build_plan(
         synthetic_owner,
         group.metadata_source,
         canonical,
+        output_prefix,
         conflicts=group.conflicts,
         manifest_confirmed=group.manifest_confirmed,
     )
@@ -482,6 +615,8 @@ class BatchProcessor:
         manifest: list[ManifestGroup] | None = None,
         dry_run: bool = False,
         discover_only: bool = False,
+        auto_resolve: bool = False,
+        output_prefix: str = "",
     ) -> BatchRun:
         snapshots: list[DocumentSnapshot] = []
         results: list[FileResult] = []
@@ -505,7 +640,10 @@ class BatchProcessor:
                     )
                 )
         relations = infer_relations(snapshots)
-        groups = resolve_groups(snapshots, relations, manifest or [], self.discovery_pseudo)
+        groups = resolve_groups(
+            snapshots, relations, manifest or [], self.discovery_pseudo,
+            auto_resolve=auto_resolve,
+        )
         mode = "discover" if discover_only else "dry-run" if dry_run else "anonymization"
 
         for group in groups:
@@ -521,7 +659,7 @@ class BatchProcessor:
                             snapshot.profile,
                             pages=int(snapshot.structural.get("page_count", 0)),
                             redactions=dict(counts),
-                            warnings=snapshot.warnings,
+                            warnings=[*snapshot.warnings, *([group.auto_resolution] if group.auto_resolution else [])],
                             error="Conflicto estricto pendiente de manifiesto." if blocked and not discover_only else None,
                             extra={
                                 "codigo_error": "STRICT_RELATION_CONFLICT" if blocked else None,
@@ -559,7 +697,9 @@ class BatchProcessor:
             if self.registry is None:
                 raise BatchError("El registro es obligatorio para generar salidas.")
             try:
-                plan = build_plan(group, self.seed, self.registry)
+                plan = build_plan(
+                    group, self.seed, self.registry, output_prefix=output_prefix,
+                )
             except (BatchError, ValueError) as exc:
                 for snapshot in group.snapshots:
                     results.append(
@@ -620,7 +760,7 @@ class BatchProcessor:
                                 output.profile,
                                 pages=output.pages,
                                 redactions=output.substitutions,
-                                warnings=output.warnings,
+                                warnings=[*output.warnings, *([group.auto_resolution] if group.auto_resolution else [])],
                                 extra={
                                     "verificacion": validation,
                                     "detecciones_seguras": _safe_detections(
@@ -652,7 +792,7 @@ class BatchProcessor:
                             atomic_state="GROUP_FAILED",
                         )
                     )
-        return BatchRun(results, relations, groups, snapshots, mode)
+        return BatchRun(results, relations, groups, snapshots, mode, auto_resolve)
 
 
 def report_payload(run: BatchRun, pseudo: Pseudonymizer) -> dict[str, Any]:
@@ -705,6 +845,7 @@ def report_payload(run: BatchRun, pseudo: Pseudonymizer) -> dict[str, Any]:
     return {
         "version": 3,
         "modo": run.mode,
+        "resolucion_automatica": run.auto_resolve,
         "archivos": files,
         "relaciones": relations,
         "resumen": {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -13,6 +14,30 @@ from ..models import AnonymizationPlan, DocumentSnapshot
 from ..pseudonyms import Pseudonymizer
 from .base import AdapterError, AdapterOutput
 from .xlsx import XlsxAdapter
+
+
+def _find_converter() -> str | None:
+    """Localiza LibreOffice sin depender exclusivamente del PATH interactivo."""
+    configured = os.environ.get("BALANCE_ANON_SOFFICE")
+    candidates = [
+        configured,
+        shutil.which("soffice"),
+        shutil.which("libreoffice"),
+        "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+        "/Applications/LibreOfficeDev.app/Contents/MacOS/soffice",
+    ]
+    # Codex distribuye un runtime con LibreOffice. La ruta se descubre en vez
+    # de fijar una versión o un nombre de usuario y solo es un respaldo local.
+    runtime_root = Path.home() / ".cache" / "codex-runtimes"
+    if runtime_root.is_dir():
+        candidates.extend(
+            str(path)
+            for path in sorted(runtime_root.glob("*/dependencies/bin/override/soffice"))
+        )
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
 
 
 class LegacyXlsAdapter:
@@ -28,7 +53,7 @@ class LegacyXlsAdapter:
     suffixes = (".xls",)
 
     def __init__(self, *, converter: str | None = None) -> None:
-        self.converter = converter or shutil.which("soffice") or shutil.which("libreoffice")
+        self.converter = converter or _find_converter()
         self.xlsx = XlsxAdapter()
 
     def _convert(self, source: Path, destination: Path) -> Path:

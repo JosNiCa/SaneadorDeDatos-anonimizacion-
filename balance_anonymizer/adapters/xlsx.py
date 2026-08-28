@@ -1239,7 +1239,10 @@ class XlsxAdapter:
 
         temporary_dir.mkdir(parents=True, exist_ok=True)
         output_source = snapshot.private.get("output_source", snapshot.source)
-        target = temporary_dir / f"anonimizado_{plan.pseudonymizer.token('output-file', str(output_source), 16)}.xlsx"
+        target = temporary_dir / (
+            f"{plan.output_prefix}anonimizado_"
+            f"{plan.pseudonymizer.token('output-file', str(output_source), 16)}.xlsx"
+        )
         if target.resolve() == snapshot.source.resolve() or target.exists():
             raise AdapterError("La salida XLSX no puede sobrescribir un archivo existente.")
         try:

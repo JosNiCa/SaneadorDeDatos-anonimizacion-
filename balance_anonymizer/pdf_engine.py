@@ -81,11 +81,17 @@ def list_input_pdfs(input_path: Path) -> list[Path]:
     )
 
 
-def output_path_for(source: Path, output_dir: Path, pseudonymizer: Pseudonymizer) -> Path:
+def output_path_for(
+    source: Path,
+    output_dir: Path,
+    pseudonymizer: Pseudonymizer,
+    *,
+    prefix: str = "",
+) -> Path:
     """No replica el nombre fuente, que podria contener informacion sensible."""
 
     identifier = pseudonymizer.token("output-file", str(source.resolve()), 16)
-    return output_dir / f"anonimizado_{identifier}.pdf"
+    return output_dir / f"{prefix}anonimizado_{identifier}.pdf"
 
 
 def _validated_words(page: fitz.Page) -> list[Any]:
@@ -906,7 +912,12 @@ def anonymize_file(
 
     source = source.resolve()
     output_dir = output_dir.resolve()
-    target = output_path_for(source, output_dir, pseudonymizer)
+    target = output_path_for(
+        source,
+        output_dir,
+        pseudonymizer,
+        prefix=plan.output_prefix if plan else "",
+    )
     if target.resolve() == source:
         raise AnonymizationError("La salida no puede sobrescribir el PDF fuente.")
     if target.exists() and not dry_run:

@@ -314,7 +314,10 @@ class XmlAdapter:
             stripped = True
 
         temporary_dir.mkdir(parents=True, exist_ok=True)
-        target = temporary_dir / f"anonimizado_{plan.pseudonymizer.token('output-file', str(snapshot.source), 16)}.xml"
+        target = temporary_dir / (
+            f"{plan.output_prefix}anonimizado_"
+            f"{plan.pseudonymizer.token('output-file', str(snapshot.source), 16)}.xml"
+        )
         if target.exists() or target.resolve() == snapshot.source.resolve():
             raise AdapterError("La salida XML no puede sobrescribir un archivo existente.")
         try:

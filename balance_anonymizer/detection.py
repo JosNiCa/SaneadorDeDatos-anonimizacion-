@@ -199,9 +199,15 @@ def _glyph_text(glyphs: Sequence[GlyphBox]) -> tuple[str, list[GlyphBox | None]]
     return "".join(chunks), mapping
 
 
-def _near_duplicate(a: WordBox | GlyphBox, b: WordBox | GlyphBox) -> bool:
+def _near_duplicate(
+    a: WordBox | GlyphBox,
+    b: WordBox | GlyphBox,
+    normalized_a: str | None = None,
+    normalized_b: str | None = None,
+) -> bool:
     return (
-        normalize(a.text) == normalize(b.text)
+        (normalized_a if normalized_a is not None else normalize(a.text))
+        == (normalized_b if normalized_b is not None else normalize(b.text))
         and max(abs(a.x0 - b.x0), abs(a.y0 - b.y0), abs(a.x1 - b.x1), abs(a.y1 - b.y1)) <= 0.8
     )
 
@@ -210,12 +216,20 @@ Positioned = TypeVar("Positioned", WordBox, GlyphBox)
 
 
 def _dedupe_positioned(items: Sequence[Positioned]) -> tuple[Positioned, ...]:
-    kept: list[Positioned] = []
+    # La deduplicación compara hasta cien elementos previos. Normalizar cada
+    # texto dentro de ese ciclo multiplicaba el coste por el número de glifos
+    # de una página; se conserva exactamente la misma ventana geométrica,
+    # pero cada texto se normaliza una sola vez.
+    kept: list[tuple[Positioned, str]] = []
     for item in sorted(items, key=lambda value: (value.y0, value.x0, value.y1, value.x1)):
-        if any(_near_duplicate(item, prior) for prior in kept[-100:]):
+        normalized_item = normalize(item.text)
+        if any(
+            _near_duplicate(item, prior, normalized_item, normalized_prior)
+            for prior, normalized_prior in kept[-100:]
+        ):
             continue
-        kept.append(item)
-    return tuple(kept)
+        kept.append((item, normalized_item))
+    return tuple(item for item, _ in kept)
 
 
 def _extract_glyphs(page_number: int, page: Any) -> tuple[GlyphBox, ...]:
@@ -451,6 +465,7 @@ def _infer_page_columns(layout: PageLayout, family: str) -> ColumnBounds | None:
     _, account_anchor = account
     description = _anchor_line(layout, "DESCRIPCION", "NOMBRE")
     nature = _anchor_line(layout, "NATURALEZA")
+    table_bottom = _table_bottom(layout)
     description_right = numeric_anchor.selection.rect[0] - 1.0
     account_left = max(0.0, account_anchor.selection.rect[0] - 3.0)
     shared = family == WEB_BALANCE
@@ -463,7 +478,7 @@ def _infer_page_columns(layout: PageLayout, family: str) -> ColumnBounds | None:
     else:
         code_rights: list[float] = []
         for line in layout.lines:
-            if line.y0 <= numeric_line.y1 + 1.0 or line.y0 >= _table_bottom(layout):
+            if line.y0 <= numeric_line.y1 + 1.0 or line.y0 >= table_bottom:
                 continue
             for word in line.words:
                 if word.x0 <= layout.width * 0.28 and _ACCOUNT_CODE_RE.match(word.text.strip() + " "):
@@ -480,7 +495,7 @@ def _infer_page_columns(layout: PageLayout, family: str) -> ColumnBounds | None:
         return None
     return ColumnBounds(
         layout.number, numeric_line.y1, description_left, description_right,
-        account_left, account_right, _table_bottom(layout), shared,
+        account_left, account_right, table_bottom, shared,
     )
 
 

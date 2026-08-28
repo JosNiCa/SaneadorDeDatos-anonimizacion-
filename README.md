@@ -48,6 +48,10 @@ se rechaza mediante un código técnico seguro. El modo estricto es el
 predeterminado. La utilidad devuelve `0` si todos los archivos terminan
 correctamente y `2` si existe un rechazo o un grupo fallido.
 
+La utilidad localiza LibreOffice desde `PATH`, instalaciones estándar de macOS
+y el runtime de Codex. También puede definir `BALANCE_ANON_SOFFICE` con la ruta
+al ejecutable `soffice` si usa una instalación no estándar.
+
 La semilla puede recibirse mediante:
 
 - `--seed-env NOMBRE_VARIABLE`, recomendado para automatización;
@@ -79,6 +83,32 @@ El reporte no guarda rutas de archivos: usa IDs HMAC para no exponerlas. Por
 ello, el reintento recalcula los IDs de las fuentes indicadas y requiere la
 misma semilla con la que se creó el reporte. Los archivos exitosos se excluyen
 antes del descubrimiento y no aparecen en el nuevo reporte.
+Las salidas de un reintento se nombran `2do lote anonimizado_<id>.<extensión>`
+para distinguirlas del lote original.
+
+## Resolución automática de equivalencias
+
+Use `--auto-resolve` para procesar un lote sin editar un manifiesto. El
+resolvedor separa primero por RFC normalizado; cuando no hay RFC exige al menos
+dos coincidencias entre nombre, domicilio y certificado. Las identidades sin
+evidencia suficiente se mantienen separadas y se marcan como `AUTO_SPLIT` en el
+reporte. Para cada grupo resuelto selecciona de forma reproducible la fuente
+con más identidad, metadatos temporales y renglones contables; la ruta solo se
+usa como desempate estable.
+
+```bash
+python anonymize_balances.py \
+  --input ./entrada \
+  --output ./salida \
+  --auto-resolve \
+  --seed-env BALANCE_ANON_SEED \
+  --registry ./estado/anon_registry.sqlite \
+  --report ./salida/reporte.json
+```
+
+En grupos `series`, la fuente seleccionada no se copia a los demás documentos:
+solo confirma la resolución. Cada archivo conserva su período relativo mediante
+el mismo desplazamiento temporal.
 
 ## Descubrimiento y modo de prueba
 

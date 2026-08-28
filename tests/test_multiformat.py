@@ -20,11 +20,12 @@ from openpyxl.drawing.image import Image
 from openpyxl.styles import Font, PatternFill
 
 from anonymize_balances import main
-from balance_anonymizer.adapters import XlsxAdapter, XmlAdapter
+from balance_anonymizer.adapters import LegacyXlsAdapter, XlsxAdapter, XmlAdapter
 from balance_anonymizer.adapters.base import AdapterError
 from balance_anonymizer.batch import (
     BatchProcessor,
     _blocking_conflicts,
+    build_plan,
     list_input_files,
     resolve_groups,
 )
@@ -484,6 +485,14 @@ def test_legacy_xls_is_reported_explicitly_instead_of_ignored(tmp_path: Path) ->
     assert run.results[0].extra["codigo_error"] == "XLSX_PROFILE_UNRECOGNIZED"
 
 
+def test_legacy_xls_finds_the_coded_runtime_converter(monkeypatch: pytest.MonkeyPatch) -> None:
+    import balance_anonymizer.adapters.unsupported as legacy
+
+    monkeypatch.setattr(legacy.shutil, "which", lambda _: None)
+    converter = LegacyXlsAdapter().converter
+    assert converter and Path(converter).name == "soffice"
+
+
 def test_batch_preserves_safe_pdf_and_xlsx_discovery_codes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -535,6 +544,21 @@ def test_xml_preserves_namespace_order_and_decimal_text_while_anonymizing_tempor
     )
 
 
+def test_batch_output_prefix_is_applied_to_generated_files(tmp_path: Path) -> None:
+    source = tmp_path / "balance.xml"
+    _make_xml(source)
+    output = tmp_path / "out"
+    with PseudonymRegistry(output / "registry.sqlite") as registry:
+        run = BatchProcessor(SEED, registry=registry).run(
+            [source.resolve()], output, output_prefix="2do lote ",
+        )
+
+    generated = Path(run.results[0].output or "")
+    assert run.results[0].success
+    assert generated.name.startswith("2do lote anonimizado_")
+    assert generated.suffix == ".xml"
+
+
 def test_xml_rejects_dtd_and_requires_explicit_signature_stripping(tmp_path: Path) -> None:
     dtd = tmp_path / "dtd.xml"
     dtd.write_text(
@@ -583,6 +607,47 @@ def test_strict_conflict_needs_manifest_metadata_source(tmp_path: Path) -> None:
     )
     confirmed = resolve_groups([left, right], relations, [declaration], Pseudonymizer(SEED))[0]
     assert _blocking_conflicts(confirmed, strict=True) == []
+
+
+def test_auto_resolve_partitions_entities_and_keeps_series_temporal(tmp_path: Path) -> None:
+    first = _snapshot(
+        tmp_path / "first", [
+            _line("100", ("0", "10", "2", "8")),
+            _line("200", ("0", "10", "2", "8")),
+            _line("300", ("0", "10", "2", "8")),
+        ],
+        owner="ENTIDAD UNO", rfc="EUO240101AA1", month=5,
+    )
+    second = _snapshot(
+        tmp_path / "second", [
+            _line("100", ("8", "3", "1", "10")),
+            _line("200", ("8", "3", "1", "10")),
+            _line("300", ("8", "3", "1", "10")),
+        ],
+        owner="ENTIDAD UNO", rfc="EUO240101AA1", month=6,
+    )
+    other = _snapshot(
+        tmp_path / "other", [_line("100", ("0", "10", "2", "8"))],
+        owner="ENTIDAD DOS", rfc="EDO240101AA1", month=5,
+    )
+    unknown = _snapshot(
+        tmp_path / "unknown", [_line("200")], owner=None, rfc=None,
+    )
+    snapshots = [first, second, other, unknown]
+    groups = resolve_groups(
+        snapshots, infer_relations(snapshots), [], Pseudonymizer(SEED), auto_resolve=True,
+    )
+
+    series = next(group for group in groups if {item.source for item in group.snapshots} == {first.source, second.source})
+    assert series.relation == RelationType.SERIES
+    assert series.manifest_confirmed and series.entity_id and series.metadata_source
+    assert series.auto_resolution == "AUTO_RESOLVED_RFC"
+    assert _blocking_conflicts(series, strict=True) == []
+    split = next(group for group in groups if group.snapshots == [unknown])
+    assert split.auto_resolution == "AUTO_SPLIT" and not split.manifest_confirmed
+    with PseudonymRegistry(tmp_path / "registry.sqlite") as registry:
+        plan = build_plan(series, SEED, registry)
+    assert plan.canonical_temporal is None
 
 
 def test_atomic_group_failure_promotes_no_member(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -60,6 +60,11 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--discover", action="store_true", help="Propone relaciones sin generar documentos.")
     parser.add_argument("--dry-run", action="store_true", help="Muestra detecciones y conflictos sin generar documentos.")
+    parser.add_argument(
+        "--auto-resolve",
+        action="store_true",
+        help="Resuelve automáticamente entidades, relaciones y fuentes de metadatos de forma conservadora.",
+    )
     parser.add_argument("--strip-signature", action="store_true", help="Elimina atributos de firma XML de forma explícita.")
     parser.add_argument("--xsd", type=Path, help="XSD local opcional; nunca se descarga.")
     parser.add_argument(
@@ -75,6 +80,8 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("Use --discover o --dry-run, no ambos.")
     if args.manifest_proposal and not (args.discover or args.dry_run):
         parser.error("--manifest-proposal requiere --discover o --dry-run.")
+    if args.auto_resolve and args.manifest:
+        parser.error("--auto-resolve no se puede combinar con --manifest.")
     return args
 
 
@@ -161,6 +168,8 @@ def main(argv: list[str] | None = None) -> int:
         run = processor.run(
             sources, args.output, manifest=manifest,
             dry_run=args.dry_run, discover_only=args.discover,
+            auto_resolve=args.auto_resolve,
+            output_prefix="2do lote " if args.retry_report else "",
         )
         write_report(report_path, report_payload(run, reporting_pseudo))
         if args.manifest_proposal:
