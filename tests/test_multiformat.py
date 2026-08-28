@@ -299,7 +299,8 @@ def test_registry_is_persistent_namespaced_and_contains_no_originals(tmp_path: P
         rows = registry._connection.execute(
             "SELECT namespace, identifier_hmac, synthetic_value, algorithm_version FROM assignments"
         ).fetchall()
-    assert {row[0] for row in rows} >= {"owner", "rfc", "bank", "account", "address", "date"}
+    assert {row[0] for row in rows} >= {"owner", "rfc", "bank", "account", "address"}
+    assert "date" not in {row[0] for row in rows}
     assert all(re.fullmatch(r"[A-F0-9]{64}", row[1]) for row in rows)
     raw = registry_path.read_bytes()
     assert original.encode() not in raw and SEED.encode() not in raw
@@ -389,6 +390,20 @@ def test_xlsx_owner_without_rfc_text_logo_and_associated_identifiers(tmp_path: P
     assert source.read_bytes() == source_digest
     assert run.results[0].redactions[Category.ASSOCIATED_BANK.value] == 1
     assert run.results[0].redactions[Category.ASSOCIATED_ENTITY.value] == 1
+
+
+def test_xlsx_six_amount_profile_allows_auxiliary_columns(tmp_path: Path) -> None:
+    source = tmp_path / "auxiliary-columns.xlsx"
+    _make_xlsx_a(source)
+    book = load_workbook(source)
+    sheet = book.active
+    sheet["I1"], sheet["J1"], sheet["K1"] = "AUX", "AUX", "AUX"
+    book.save(source)
+
+    snapshot = XlsxAdapter().discover(source, Pseudonymizer(SEED), strict=True)
+
+    assert snapshot.profile == "XLSX_CONTPAQ_8_COLUMNS"
+    assert len(snapshot.ledger_lines) == 3
 
 
 def test_xlsx_removes_logo_relationships_and_preserves_structure_formula_types_styles(tmp_path: Path) -> None:

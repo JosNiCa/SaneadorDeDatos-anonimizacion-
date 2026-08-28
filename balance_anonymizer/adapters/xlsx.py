@@ -420,6 +420,44 @@ def _row_labels(sheet: Any, row: int) -> dict[int, str]:
     }
 
 
+def _six_monetary_columns(
+    sheet: Any,
+    *,
+    header_row: int,
+    account_column: int,
+    description_column: int,
+) -> tuple[int, ...]:
+    """Encuentra seis importes en plantillas con columnas auxiliares.
+
+    Se exige evidencia en al menos tres renglones con cuenta válida, por lo
+    que una columna administrativa o una fecha no se confunde con importes.
+    """
+    account_rows = [
+        row
+        for row in range(header_row + 1, sheet.max_row + 1)
+        if isinstance(sheet.cell(row, account_column).value, str)
+        and ACCOUNT_RE.fullmatch(sheet.cell(row, account_column).value.strip())
+    ][:50]
+    minimum = min(3, len(account_rows))
+    if minimum < 3:
+        return ()
+    candidates: list[int] = []
+    for column in range(description_column + 1, sheet.max_column + 1):
+        numeric = 0
+        for row in account_rows:
+            value = sheet.cell(row, column).value
+            if value is None:
+                continue
+            try:
+                decimal_value(value)
+            except ValueError:
+                continue
+            numeric += 1
+        if numeric >= minimum:
+            candidates.append(column)
+    return tuple(candidates) if len(candidates) == 6 else ()
+
+
 def _find_profile(book: Any) -> SheetProfile:
     for sheet in book.worksheets:
         for row in range(1, min(sheet.max_row, 50) + 1):
@@ -464,6 +502,13 @@ def _find_profile(book: Any) -> SheetProfile:
                 if account is None or description is None:
                     continue
                 monetary = tuple(sorted(column for column in range(description + 1, sheet.max_column + 1)))
+                if len(monetary) != 6:
+                    monetary = _six_monetary_columns(
+                        sheet,
+                        header_row=row,
+                        account_column=account,
+                        description_column=description,
+                    )
                 if len(monetary) != 6:
                     continue
                 return SheetProfile(

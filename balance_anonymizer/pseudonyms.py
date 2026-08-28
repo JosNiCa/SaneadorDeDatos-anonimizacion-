@@ -455,11 +455,11 @@ class Pseudonymizer:
         scope = normalize(entity_key or self._scope)
         digest = self._digest("date-offset", scope)
         candidates = tuple(-value for value in range(13, 121) if value % 12)
-        months = candidates[int.from_bytes(digest[:2], "big") % len(candidates)]
-        registered = self._registered(
-            "date", f"month-offset:{scope}", "offset_months", str(months)
-        )
-        return int(registered)
+        # Un desfase mensual no es un identificador: varios sujetos pueden
+        # compartirlo sin crear asociación entre ellos. Registrarlo como
+        # valor único agotaba el espacio finito de 99 alternativas y podía
+        # bloquear un lote válido con una colisión artificial.
+        return candidates[int.from_bytes(digest[:2], "big") % len(candidates)]
 
     def shift_date(self, original: date) -> date:
         """Desplaza una fecha preservando fin de mes cuando corresponde."""
