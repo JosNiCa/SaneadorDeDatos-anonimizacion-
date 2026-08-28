@@ -701,6 +701,30 @@ def test_cli_never_uses_a_source_as_report_destination(
     assert source.read_bytes() == original
 
 
+def test_cli_never_overwrites_an_existing_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.xlsx"
+    _make_xlsx_b(source)
+    report = tmp_path / "existing-report.json"
+    original = '{"preservar": true}\n'
+    report.write_text(original, encoding="utf-8")
+    monkeypatch.setenv("BALANCE_ANON_SEED", SEED)
+
+    code = main(
+        [
+            "--input", str(source),
+            "--output", str(tmp_path / "out"),
+            "--discover",
+            "--report", str(report),
+        ]
+    )
+
+    assert code == 2
+    assert report.read_text(encoding="utf-8") == original
+
+
 def test_cli_retry_report_processes_only_previously_failed_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

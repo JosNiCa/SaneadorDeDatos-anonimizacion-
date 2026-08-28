@@ -149,6 +149,10 @@ def main(argv: list[str] | None = None) -> int:
         manifest = load_manifest(args.manifest)
         report_path = args.report or (args.output / "reporte_tecnico.json")
         _reject_source_destination(report_path, sources, "reporte")
+        if report_path.exists():
+            raise BatchError(
+                "El reporte ya existe y no se sobrescribirá; indique una ruta de reporte nueva."
+            )
         if args.manifest_proposal:
             _reject_source_destination(args.manifest_proposal, sources, "propuesta de manifiesto")
             if args.manifest_proposal.resolve() == report_path.resolve():

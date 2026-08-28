@@ -859,6 +859,8 @@ def report_payload(run: BatchRun, pseudo: Pseudonymizer) -> dict[str, Any]:
 
 def write_report(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        raise BatchError("El reporte ya existe y no se sobrescribirá; indique una ruta de reporte nueva.")
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, path)

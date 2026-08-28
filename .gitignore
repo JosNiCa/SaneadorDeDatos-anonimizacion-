@@ -15,6 +15,11 @@ output/
 salida/
 tmp/
 
+# Reportes técnicos generados durante ejecuciones locales.
+/auto-resolve-dry-run.json
+/salida_2do_lote/reporte.json
+/salida_2do_lote_v2/reporte.json
+
 # Fixtures reales/sanitizados y resultados privados de validación.
 .private-fixtures/
 private-fixtures/

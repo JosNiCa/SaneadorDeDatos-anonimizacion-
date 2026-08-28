@@ -83,6 +83,8 @@ El reporte no guarda rutas de archivos: usa IDs HMAC para no exponerlas. Por
 ello, el reintento recalcula los IDs de las fuentes indicadas y requiere la
 misma semilla con la que se creó el reporte. Los archivos exitosos se excluyen
 antes del descubrimiento y no aparecen en el nuevo reporte.
+Los reportes existentes nunca se sobrescriben: cada corrida debe indicar una
+ruta de reporte nueva.
 Las salidas de un reintento se nombran `2do lote anonimizado_<id>.<extensión>`
 para distinguirlas del lote original.
 
