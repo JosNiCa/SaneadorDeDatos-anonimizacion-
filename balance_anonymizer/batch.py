@@ -52,6 +52,17 @@ SAFE_ERROR_CODES = {
     "PDF_LEDGER_UNREADABLE",
     "PDF_STRUCTURE_UNREADABLE",
     "PDF_DISCOVERY_ENGINE_FAILED",
+    "PDF_OUTPUT_ENGINE_FAILED",
+    "PDF_REDACTION_REGION_UNSAFE",
+    "PDF_REPLACEMENT_UNFIT",
+    "PDF_OUTPUT_VERIFICATION_FAILED",
+    "PDF_OUTPUT_LEDGER_VALIDATION_FAILED",
+    "PDF_OUTPUT_REANALYSIS_FAILED",
+    "PDF_OUTPUT_ANNOTATION_FAILED",
+    "PDF_OUTPUT_INSERTION_FAILED",
+    "PDF_OUTPUT_SAVE_FAILED",
+    "PDF_OUTPUT_SANITIZE_FAILED",
+    "PDF_OUTPUT_VERIFICATION_RUNTIME_FAILED",
     "XLSX_ARCHIVE_TOO_LARGE",
     "XLSX_INVALID_CONTAINER",
     "XLSX_STRUCTURE_LIMIT",
@@ -60,6 +71,11 @@ SAFE_ERROR_CODES = {
     "XLSX_LEDGER_UNREADABLE",
     "XLSX_OWNER_UNREADABLE",
     "XLSX_DISCOVERY_FAILED",
+    "XLSX_OUTPUT_APPLICATION_FAILED",
+    "XLSX_OUTPUT_REOPEN_FAILED",
+    "XLSX_OUTPUT_LOCATION_INVALID",
+    "XLSX_OUTPUT_SAVE_FAILED",
+    "XLSX_OUTPUT_VALIDATION_FAILED",
     "XLS_CONVERTER_UNAVAILABLE",
     "XLS_CONVERSION_FAILED",
     "XLS_CONVERSION_NOT_DETERMINISTIC",
@@ -634,7 +650,12 @@ class BatchProcessor:
                         False,
                         None,
                         error="El archivo no pudo superar el descubrimiento seguro.",
-                        extra={"codigo_error": _safe_error_code(exc, "DISCOVERY_FAILED")},
+                        extra={
+                            "codigo_error": _safe_error_code(exc, "DISCOVERY_FAILED"),
+                            "diagnostico_estructura": (
+                                exc.diagnostic if isinstance(exc, AdapterError) else {}
+                            ),
+                        },
                         adapter=adapter.name,
                         atomic_state="DISCOVERY_FAILED",
                     )
@@ -720,10 +741,17 @@ class BatchProcessor:
             group_outputs: list[tuple[DocumentSnapshot, AdapterOutput]] = []
             group_error: str | None = None
             group_error_code = "ATOMIC_GROUP_FAILED"
+            # Conservamos únicamente diagnóstico operacional: la fase y el
+            # identificador opaco del miembro. Nunca se serializa el detalle
+            # de una excepción, pues podría contener texto del documento.
+            group_error_stage: str | None = None
+            group_error_source: Path | None = None
             with tempfile.TemporaryDirectory(prefix=".balance_group_", dir=output_dir) as temporary_name:
                 temporary = Path(temporary_name)
                 try:
                     for snapshot in group.snapshots:
+                        group_error_stage = "APPLY"
+                        group_error_source = snapshot.source
                         output = self._adapter(snapshot.source).apply(
                             snapshot,
                             plan,
@@ -731,12 +759,16 @@ class BatchProcessor:
                             strict=self.strict,
                         )
                         group_outputs.append((snapshot, output))
+                    group_error_stage = "CROSS_VALIDATION"
+                    group_error_source = None
                     cross_validation = _validate_group_relations(group, group_outputs)
                     destinations = [output_dir / output.temporary_path.name for _, output in group_outputs]
                     if any(path.exists() for path in destinations):
+                        group_error_stage = "DESTINATION_CHECK"
                         raise BatchError("Ya existe una salida y no se sobrescribirá.")
                     promoted: list[tuple[Path, Path]] = []
                     try:
+                        group_error_stage = "PROMOTION"
                         for (_, output), destination in zip(group_outputs, destinations):
                             os.replace(output.temporary_path, destination)
                             promoted.append((destination, output.temporary_path))
@@ -748,6 +780,9 @@ class BatchProcessor:
                 except (AdapterError, BatchError, OSError, RuntimeError, ValueError) as exc:
                     group_error = "Un miembro del grupo falló; no se promovió ninguna salida."
                     group_error_code = _safe_error_code(exc, "ATOMIC_GROUP_FAILED")
+                    adapter_diagnostic = (
+                        exc.diagnostic_stage if isinstance(exc, AdapterError) else None
+                    )
                 if group_error is None:
                     for (snapshot, output), destination in zip(group_outputs, destinations):
                         validation = dict(output.validation)
@@ -784,7 +819,13 @@ class BatchProcessor:
                             False,
                             snapshot.profile,
                             error=group_error,
-                            extra={"codigo_error": group_error_code},
+                            extra={
+                                "codigo_error": group_error_code,
+                                "etapa_error": group_error_stage,
+                                "diagnostico_adaptador": adapter_diagnostic,
+                                "miembro_causante": str(group_error_source)
+                                if group_error_source else None,
+                            },
                             adapter=snapshot.adapter,
                             group_id=group.id,
                             relation=group.relation.value,
@@ -814,6 +855,13 @@ def report_payload(run: BatchRun, pseudo: Pseudonymizer) -> dict[str, Any]:
                 "validaciones": result.extra.get("verificacion", result.extra.get("validacion", {})),
                 "advertencias": result.warnings,
                 "codigo_error": result.extra.get("codigo_error"),
+                "etapa_error": result.extra.get("etapa_error"),
+                "diagnostico_adaptador": result.extra.get("diagnostico_adaptador"),
+                "diagnostico_estructura": result.extra.get("diagnostico_estructura", {}),
+                "miembro_causante": (
+                    pseudo.token("report-file", result.extra["miembro_causante"], 32)
+                    if result.extra.get("miembro_causante") else None
+                ),
                 "error": result.error,
             }
         )

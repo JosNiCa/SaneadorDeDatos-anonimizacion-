@@ -75,6 +75,28 @@ _XLSX_DISCOVERY_CODES = {
 def _xlsx_discovery_code(error: BaseException) -> str:
     """Devuelve un código que no incorpora contenido de la hoja."""
     return _XLSX_DISCOVERY_CODES.get(str(error), "XLSX_DISCOVERY_FAILED")
+
+
+def _safe_workbook_diagnostic(book: Any) -> dict[str, Any]:
+    """Resume forma y etiquetas contables reconocidas sin serializar celdas."""
+    known = {
+        "NOCUENTA", "NATURALEZA", "CUENTA", "SALDOINICIAL", "DEBE", "HABER",
+        "SALDOFINAL", "CARGOS", "ABONOS", "DEUDOR", "ACREEDOR", "NOMBRE", "DESCRIPCION",
+    }
+    sheets: list[dict[str, int]] = []
+    for sheet in book.worksheets:
+        labels = {
+            label
+            for row in range(1, min(sheet.max_row, 50) + 1)
+            for label in _row_labels(sheet, row).values()
+            if label in known
+        }
+        sheets.append({
+            "filas": sheet.max_row,
+            "columnas": sheet.max_column,
+            "etiquetas_contables_reconocidas": len(labels),
+        })
+    return {"hojas": len(book.worksheets), "forma_hojas": sheets}
 MAX_ARCHIVE_SIZE = 100 * 1024 * 1024
 MAX_UNCOMPRESSED_SIZE = 250 * 1024 * 1024
 MAX_PARTS = 5000
@@ -993,6 +1015,9 @@ class XlsxAdapter:
     name = "xlsx"
     suffixes = (".xlsx", ".xlsm")
 
+    def __init__(self) -> None:
+        self.application_stage: str | None = None
+
     def discover(
         self,
         source: Path,
@@ -1022,7 +1047,10 @@ class XlsxAdapter:
         except AdapterError as exc:
             if str(exc) == "UNSUPPORTED_XLSX_OBJECT":
                 raise
-            raise AdapterError(_xlsx_discovery_code(exc)) from exc
+            raise AdapterError(
+                _xlsx_discovery_code(exc),
+                diagnostic=_safe_workbook_diagnostic(book),
+            ) from exc
         spans.extend(image_spans)
         temporal_values = [
             (span.original, span.location)
@@ -1073,10 +1101,12 @@ class XlsxAdapter:
         *,
         strict: bool,
     ) -> AdapterOutput:
+        self.application_stage = "LOAD"
         try:
             book = _load_workbook_compatible(snapshot.source)
         except Exception as exc:
             raise AdapterError("No se pudo reabrir el XLSX para aplicar el plan.") from exc
+        self.application_stage = "MUTATE"
         before_cells = _cell_state(book)
         before_sheets = [_dimensions_state(sheet) for sheet in book.worksheets]
         target_cells: set[tuple[str, str]] = set()
@@ -1245,6 +1275,7 @@ class XlsxAdapter:
         )
         if target.resolve() == snapshot.source.resolve() or target.exists():
             raise AdapterError("La salida XLSX no puede sobrescribir un archivo existente.")
+        self.application_stage = "SAVE"
         try:
             _save_workbook_preserving_properties(book, target)
             ignored_empty_cells = _restore_non_target_cell_payloads(snapshot.source, target, target_cells)
@@ -1254,6 +1285,7 @@ class XlsxAdapter:
             target.unlink(missing_ok=True)
             raise AdapterError("No se pudo guardar el XLSX temporal.") from exc
 
+        self.application_stage = "VALIDATE"
         try:
             _archive_parts(target, strict=strict)
             generated_book = _load_workbook_compatible(target)
@@ -1299,6 +1331,7 @@ class XlsxAdapter:
                 media_parts = [name for name in archive.namelist() if name.startswith("xl/media/")]
                 if len(media_parts) != snapshot.structural.get("image_count", 0) - removed_images:
                     raise AdapterError("Persisten imágenes de logotipo o relaciones OOXML huérfanas.")
+            self.application_stage = "REDISCOVER"
             generated = self.discover(target, plan.pseudonymizer, strict=strict)
             _validate_ledger(snapshot, generated)
         except Exception:

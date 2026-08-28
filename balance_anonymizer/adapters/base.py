@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from ..models import AnonymizationPlan, DocumentSnapshot
 from ..pseudonyms import Pseudonymizer
@@ -10,6 +10,17 @@ from ..pseudonyms import Pseudonymizer
 
 class AdapterError(RuntimeError):
     """Fallo de adaptador que no debe incorporar PII al reporte."""
+
+    def __init__(
+        self,
+        code: str,
+        *,
+        diagnostic_stage: str | None = None,
+        diagnostic: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(code)
+        self.diagnostic_stage = diagnostic_stage
+        self.diagnostic = diagnostic or {}
 
 
 @dataclass

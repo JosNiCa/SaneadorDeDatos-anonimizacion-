@@ -19,6 +19,8 @@ from ..models import (
     SensitiveSpan,
 )
 from ..pdf_engine import AnonymizationError, anonymize_file
+from ..pdf_engine import _validate_document
+from ..detection import detect_document
 from ..pseudonyms import Pseudonymizer
 from ..relations import normalize_account_code
 from .base import AdapterError, AdapterOutput
@@ -41,10 +43,65 @@ _PDF_DISCOVERY_CODES = {
     "Existe un candidato sensible ambiguo en modo estricto.": "PDF_AMBIGUOUS_SENSITIVE_FIELD",
 }
 
+_PDF_OUTPUT_CODES = {
+    "No existe una region de redaccion segura entre glifos vecinos.": "PDF_REDACTION_REGION_UNSAFE",
+    "La configuracion de regiones vectoriales es invalida.": "PDF_OUTPUT_ENGINE_FAILED",
+    "No se pudo renderizar una pagina para verificarla.": "PDF_OUTPUT_VERIFICATION_FAILED",
+    "No se pudo generar un reemplazo distinto del valor fuente.": "PDF_OUTPUT_ENGINE_FAILED",
+    "El reemplazo no cabe de forma legible en su campo o celda.": "PDF_REPLACEMENT_UNFIT",
+    "No se pudieron inspeccionar todos los objetos del PDF.": "PDF_OUTPUT_VERIFICATION_FAILED",
+    "El renderizado cambio de dimensiones durante la verificacion.": "PDF_OUTPUT_VERIFICATION_FAILED",
+    "La verificacion encontro un valor sensible residual.": "PDF_OUTPUT_VERIFICATION_FAILED",
+    "La verificacion encontro un valor sensible en objetos internos.": "PDF_OUTPUT_VERIFICATION_FAILED",
+    "La verificacion no encontro un reemplazo esperado.": "PDF_OUTPUT_VERIFICATION_FAILED",
+    "La salida conserva cifrado no autorizado.": "PDF_OUTPUT_VERIFICATION_FAILED",
+    "La cantidad de paginas cambio durante la redaccion.": "PDF_OUTPUT_VERIFICATION_FAILED",
+    "La geometria, caja o rotacion de una pagina cambio.": "PDF_OUTPUT_VERIFICATION_FAILED",
+    "Cambiaron palabras o coordenadas fuera de las regiones autorizadas.": "PDF_OUTPUT_VERIFICATION_FAILED",
+    "Cambiaron tokens numericos contables fuera de las regiones autorizadas.": "PDF_OUTPUT_VERIFICATION_FAILED",
+    "Cambiaron dibujos vectoriales fuera de las regiones autorizadas.": "PDF_OUTPUT_VERIFICATION_FAILED",
+    "Cambio una imagen que no fue clasificada como logo.": "PDF_OUTPUT_VERIFICATION_FAILED",
+    "Un logo rasterizado confirmado permanece en la salida.": "PDF_OUTPUT_VERIFICATION_FAILED",
+    "La diferencia visual excede las regiones autorizadas.": "PDF_OUTPUT_VERIFICATION_FAILED",
+    "Persisten XMP, adjuntos o marcadores internos.": "PDF_OUTPUT_VERIFICATION_FAILED",
+    "Persisten metadatos internos originales.": "PDF_OUTPUT_VERIFICATION_FAILED",
+    "PDF_RUNTIME_ANNOTATION": "PDF_OUTPUT_ANNOTATION_FAILED",
+    "PDF_RUNTIME_INSERTION": "PDF_OUTPUT_INSERTION_FAILED",
+    "PDF_RUNTIME_SAVE": "PDF_OUTPUT_SAVE_FAILED",
+    "PDF_RUNTIME_SANITIZE": "PDF_OUTPUT_SANITIZE_FAILED",
+    "PDF_RUNTIME_VERIFY": "PDF_OUTPUT_VERIFICATION_RUNTIME_FAILED",
+}
+
 
 def _pdf_discovery_code(error: BaseException) -> str:
     """Convierte fallos conocidos del motor en códigos seguros y estables."""
     return _PDF_DISCOVERY_CODES.get(str(error), "PDF_DISCOVERY_ENGINE_FAILED")
+
+
+def _pdf_output_code(error: BaseException) -> str:
+    """Convierte errores de publicación PDF en códigos seguros y estables."""
+    return _PDF_OUTPUT_CODES.get(str(error), "PDF_OUTPUT_ENGINE_FAILED")
+
+
+def _safe_discovery_diagnostic(source: Path, pseudonymizer: Pseudonymizer) -> dict[str, Any]:
+    """Describe estructura y hallazgos por categoría, nunca texto del PDF."""
+    try:
+        with fitz.open(source) as document:
+            result: dict[str, Any] = {"paginas": document.page_count}
+            layouts = _validate_document(document)
+            detected = detect_document(layouts, pseudonymizer)
+            if detected is None:
+                result["perfil_candidato"] = None
+                result["familias_puntuadas"] = 0
+                return result
+            result["perfil_candidato"] = detected.name
+            result["campos_faltantes"] = sorted(detected.extra.get("fatal", []))
+            result["categorias_detectadas"] = sorted(
+                {item.category.value for item in detected.detections}
+            )
+            return result
+    except (AnonymizationError, fitz.FileDataError, OSError, RuntimeError, ValueError):
+        return {"estructura_no_disponible": True}
 
 
 def _decimal(text: str) -> Decimal:
@@ -339,7 +396,10 @@ class PdfAdapter:
                 vector_regions=self.vector_regions,
             )
         except (AnonymizationError, OSError, RuntimeError, ValueError) as exc:
-            raise AdapterError(_pdf_discovery_code(exc)) from exc
+            raise AdapterError(
+                _pdf_discovery_code(exc),
+                diagnostic=_safe_discovery_diagnostic(source, pseudonymizer),
+            ) from exc
         if not detected.success or not detected.profile:
             raise AdapterError("PDF_PROFILE_UNRECOGNIZED")
         try:
@@ -401,8 +461,18 @@ class PdfAdapter:
                 vector_regions=self.vector_regions,
                 plan=plan,
             )
-        except (AnonymizationError, OSError, RuntimeError, ValueError) as exc:
-            raise AdapterError("Falló la redacción o verificación PDF existente.") from exc
+        except AnonymizationError as exc:
+            raise AdapterError(
+                _pdf_output_code(exc), diagnostic_stage="PDF_ENGINE"
+            ) from exc
+        except OSError as exc:
+            raise AdapterError(
+                "PDF_OUTPUT_ENGINE_FAILED", diagnostic_stage="PDF_IO"
+            ) from exc
+        except (RuntimeError, ValueError) as exc:
+            raise AdapterError(
+                "PDF_OUTPUT_ENGINE_FAILED", diagnostic_stage="PDF_RUNTIME"
+            ) from exc
         if not result.success or not result.output:
             raise AdapterError("El motor PDF no produjo una salida validada.")
         target = Path(result.output)
@@ -429,9 +499,16 @@ class PdfAdapter:
                 generated_lines,
             )
             _validate_ledger(snapshot, generated)
-        except Exception:
+        except AdapterError as exc:
             target.unlink(missing_ok=True)
-            raise
+            raise AdapterError(
+                "PDF_OUTPUT_LEDGER_VALIDATION_FAILED", diagnostic_stage="LEDGER_VALIDATION"
+            ) from exc
+        except (fitz.FileDataError, OSError, RuntimeError, ValueError) as exc:
+            target.unlink(missing_ok=True)
+            raise AdapterError(
+                "PDF_OUTPUT_REANALYSIS_FAILED", diagnostic_stage="OUTPUT_REANALYSIS"
+            ) from exc
         validation = dict(result.extra.get("verificacion", {}))
         validation["ledger_preserved"] = True
         return AdapterOutput(

@@ -16,6 +16,31 @@ from .base import AdapterError, AdapterOutput
 from .xlsx import XlsxAdapter
 
 
+_XLSX_APPLY_CODES = {
+    "No se pudo reabrir el XLSX para aplicar el plan.": "XLSX_OUTPUT_REOPEN_FAILED",
+    "Ubicación XLSX incompleta.": "XLSX_OUTPUT_LOCATION_INVALID",
+    "Una celda sensible cambió de tipo antes de aplicar el plan.": "XLSX_OUTPUT_LOCATION_INVALID",
+    "El comentario sensible esperado no existe.": "XLSX_OUTPUT_LOCATION_INVALID",
+    "La propiedad sensible esperada no existe.": "XLSX_OUTPUT_LOCATION_INVALID",
+    "La fecha de propiedad sensible esperada no existe.": "XLSX_OUTPUT_LOCATION_INVALID",
+    "Ubicación de encabezado o pie XLSX incompleta.": "XLSX_OUTPUT_LOCATION_INVALID",
+    "El encabezado o pie sensible esperado no existe.": "XLSX_OUTPUT_LOCATION_INVALID",
+    "Ubicación de hipervínculo XLSX incompleta.": "XLSX_OUTPUT_LOCATION_INVALID",
+    "El hipervínculo sensible esperado no existe.": "XLSX_OUTPUT_LOCATION_INVALID",
+    "Ubicación de nombre definido XLSX incompleta.": "XLSX_OUTPUT_LOCATION_INVALID",
+    "El nombre definido sensible esperado no existe.": "XLSX_OUTPUT_LOCATION_INVALID",
+    "El campo sensible del nombre definido no existe.": "XLSX_OUTPUT_LOCATION_INVALID",
+    "La salida XLSX no puede sobrescribir un archivo existente.": "XLSX_OUTPUT_SAVE_FAILED",
+    "No se pudo guardar el XLSX temporal.": "XLSX_OUTPUT_SAVE_FAILED",
+    "Cambió la cantidad de hojas del XLSX.": "XLSX_OUTPUT_VALIDATION_FAILED",
+    "Cambió la estructura no objetivo del XLSX.": "XLSX_OUTPUT_VALIDATION_FAILED",
+    "Desapareció una celda del XLSX.": "XLSX_OUTPUT_VALIDATION_FAILED",
+    "Persisten imágenes de logotipo o relaciones OOXML huérfanas.": "XLSX_OUTPUT_VALIDATION_FAILED",
+    "La validación XLSX detectó cambios en códigos u orden de cuentas.": "XLSX_OUTPUT_VALIDATION_FAILED",
+    "La validación XLSX detectó cambios en importes.": "XLSX_OUTPUT_VALIDATION_FAILED",
+}
+
+
 def _find_converter() -> str | None:
     """Localiza LibreOffice sin depender exclusivamente del PATH interactivo."""
     configured = os.environ.get("BALANCE_ANON_SOFFICE")
@@ -118,15 +143,34 @@ class LegacyXlsAdapter:
         *,
         strict: bool,
     ) -> AdapterOutput:
-        with tempfile.TemporaryDirectory(prefix=".balance_xls_apply_", dir=temporary_dir) as temporary_name:
-            converted = self._convert(snapshot.source, Path(temporary_name))
-            converted_snapshot = self.xlsx.discover(converted, plan.pseudonymizer, strict=strict)
-            if not self._compatible(snapshot, converted_snapshot):
-                raise AdapterError("XLS_CONVERSION_NOT_DETERMINISTIC")
-            converted_private: dict[str, Any] = dict(converted_snapshot.private)
-            converted_private["output_source"] = snapshot.source
-            converted_snapshot = replace(converted_snapshot, private=converted_private)
-            output = self.xlsx.apply(converted_snapshot, plan, temporary_dir, strict=strict)
+        stage = "CONVERSION"
+        try:
+            with tempfile.TemporaryDirectory(prefix=".balance_xls_apply_", dir=temporary_dir) as temporary_name:
+                converted = self._convert(snapshot.source, Path(temporary_name))
+                stage = "XLSX_REDISCOVERY"
+                converted_snapshot = self.xlsx.discover(converted, plan.pseudonymizer, strict=strict)
+                stage = "CONVERSION_CONSISTENCY"
+                if not self._compatible(snapshot, converted_snapshot):
+                    raise AdapterError("XLS_CONVERSION_NOT_DETERMINISTIC")
+                converted_private: dict[str, Any] = dict(converted_snapshot.private)
+                converted_private["output_source"] = snapshot.source
+                converted_snapshot = replace(converted_snapshot, private=converted_private)
+                stage = "XLSX_APPLICATION"
+                output = self.xlsx.apply(converted_snapshot, plan, temporary_dir, strict=strict)
+        except (AdapterError, OSError, RuntimeError, ValueError) as exc:
+            if str(exc) in {
+                "XLS_CONVERTER_UNAVAILABLE",
+                "XLS_CONVERSION_FAILED",
+                "XLS_CONVERSION_NOT_DETERMINISTIC",
+            }:
+                raise
+            raise AdapterError(
+                _XLSX_APPLY_CODES.get(str(exc), "XLSX_OUTPUT_APPLICATION_FAILED"),
+                diagnostic_stage=(
+                    f"{stage}:{self.xlsx.application_stage or 'UNKNOWN'}:"
+                    f"{type(exc).__name__}"
+                ),
+            ) from exc
         output.warnings.append("LEGACY_XLS_CONVERTED_TO_XLSX")
         output.validation["legacy_xls_converted_to_xlsx"] = True
         return output

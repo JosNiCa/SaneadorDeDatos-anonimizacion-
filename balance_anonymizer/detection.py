@@ -34,6 +34,7 @@ _DATE_RE = re.compile(
 )
 _TIME_RE = re.compile(r"(?<!\d)\d{1,2}:\d{2}(?::\d{2})?(?!\d)")
 _ACCOUNT_CODE_RE = re.compile(r"^\d+(?:[.\-]\d+)*(?:\s|$)")
+_MONEY_WORD_RE = re.compile(r"^-?\d[\d,]*\.\d{2}$")
 _BANK_CONTEXT_RE = re.compile(r"\b(?:BANCO|BANCOS|BANCARIA|BANCARIO|CTA|CUENTA|CLABE|CHEQUE)\b")
 _GENERIC_USER_VALUES = {
     "ADMIN", "ADMINISTRADOR", "ADMINISTRADORA", "DEFAULT", "GENERICO",
@@ -460,6 +461,8 @@ def _infer_page_columns(layout: PageLayout, family: str) -> ColumnBounds | None:
     numeric = _anchor_line(layout, "SALDOS INICIALES", "SALDO INICIAL")
     account = _anchor_line(layout, "NO DE CUENTA", "CUENTA")
     if numeric is None or account is None:
+        if family == WEB_BALANCE:
+            return _infer_web_columns_from_rows(layout)
         return None
     numeric_line, numeric_anchor = numeric
     _, account_anchor = account
@@ -496,6 +499,60 @@ def _infer_page_columns(layout: PageLayout, family: str) -> ColumnBounds | None:
     return ColumnBounds(
         layout.number, numeric_line.y1, description_left, description_right,
         account_left, account_right, table_bottom, shared,
+    )
+
+
+def _infer_web_columns_from_rows(layout: PageLayout) -> ColumnBounds | None:
+    """Respaldo geométrico para WEB cuando el encabezado está fragmentado.
+
+    Solo se acepta si al menos tres renglones presentan un código contable y
+    cuatro importes decimales con la misma posición horizontal. Así no se
+    convierte una página narrativa en una tabla por heurística laxa.
+    """
+    candidates: list[tuple[float, float, float]] = []
+    table_bottom = _table_bottom(layout)
+    for line in layout.lines:
+        if line.y0 >= table_bottom:
+            continue
+        words = sorted(line.words, key=lambda item: item.x0)
+        account = next(
+            (
+                word for word in words
+                if word.x0 <= layout.width * 0.40
+                and _ACCOUNT_CODE_RE.match(word.text.strip() + " ")
+            ),
+            None,
+        )
+        monetary = [word for word in words if _MONEY_WORD_RE.fullmatch(word.text.strip())]
+        if account is None or len(monetary) < 4:
+            continue
+        first_amount = monetary[-4]
+        if first_amount.x0 <= account.x1 + 8.0:
+            continue
+        candidates.append((account.x0, first_amount.x0, line.y0))
+    if len(candidates) < 3:
+        return None
+    account_lefts = [item[0] for item in candidates]
+    amount_lefts = [item[1] for item in candidates]
+    # Un desvío mayor a 2% del ancho indica que no hay una cuadrícula estable.
+    if (
+        max(account_lefts) - min(account_lefts) > layout.width * 0.02
+        or max(amount_lefts) - min(amount_lefts) > layout.width * 0.02
+    ):
+        return None
+    account_left = statistics.median(account_lefts)
+    description_right = statistics.median(amount_lefts) - 1.0
+    if not 0.0 <= account_left < description_right <= layout.width:
+        return None
+    return ColumnBounds(
+        layout.number,
+        max(0.0, min(item[2] for item in candidates) - 1.0),
+        account_left,
+        description_right,
+        account_left,
+        description_right,
+        table_bottom,
+        True,
     )
 
 

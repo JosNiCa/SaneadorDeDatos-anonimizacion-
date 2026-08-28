@@ -985,20 +985,35 @@ def anonymize_file(
         os.close(descriptor)
         temporary = Path(temporary_name)
         try:
-            vector_count = _add_redaction_annotations(document, detections, configured)
-            _insert_replacements(document, detections)
-            _clear_internal_data(document)
-            document.save(
-                temporary,
-                garbage=4,
-                clean=True,
-                deflate=True,
-                deflate_images=True,
-                deflate_fonts=True,
-                encryption=fitz.PDF_ENCRYPT_NONE,
-                preserve_metadata=0,
-            )
-            verification = _verify_output(temporary, snapshot, detections, configured)
+            try:
+                vector_count = _add_redaction_annotations(document, detections, configured)
+            except RuntimeError as exc:
+                raise AnonymizationError("PDF_RUNTIME_ANNOTATION") from exc
+            try:
+                _insert_replacements(document, detections)
+            except RuntimeError as exc:
+                raise AnonymizationError("PDF_RUNTIME_INSERTION") from exc
+            try:
+                _clear_internal_data(document)
+            except RuntimeError as exc:
+                raise AnonymizationError("PDF_RUNTIME_SANITIZE") from exc
+            try:
+                document.save(
+                    temporary,
+                    garbage=4,
+                    clean=True,
+                    deflate=True,
+                    deflate_images=True,
+                    deflate_fonts=True,
+                    encryption=fitz.PDF_ENCRYPT_NONE,
+                    preserve_metadata=0,
+                )
+            except RuntimeError as exc:
+                raise AnonymizationError("PDF_RUNTIME_SAVE") from exc
+            try:
+                verification = _verify_output(temporary, snapshot, detections, configured)
+            except RuntimeError as exc:
+                raise AnonymizationError("PDF_RUNTIME_VERIFY") from exc
             os.replace(temporary, target)
         except Exception:
             temporary.unlink(missing_ok=True)

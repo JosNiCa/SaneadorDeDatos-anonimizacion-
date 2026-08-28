@@ -27,6 +27,7 @@ from balance_anonymizer.batch import (
     _blocking_conflicts,
     build_plan,
     list_input_files,
+    report_payload,
     resolve_groups,
 )
 from balance_anonymizer.manifest import ManifestGroup, load_manifest
@@ -677,6 +678,11 @@ def test_atomic_group_failure_promotes_no_member(tmp_path: Path, monkeypatch: py
     assert len(run.results) == 2 and not any(item.success for item in run.results)
     assert {item.atomic_state for item in run.results} == {"GROUP_FAILED"}
     assert not list(output.glob("anonimizado_*"))
+    report = report_payload(run, Pseudonymizer(SEED))
+    assert {item["etapa_error"] for item in report["archivos"]} == {"APPLY"}
+    assert {item["miembro_causante"] for item in report["archivos"]} == {
+        Pseudonymizer(SEED).token("report-file", str(xml.resolve()), 32)
+    }
 
 
 def test_cli_never_uses_a_source_as_report_destination(
